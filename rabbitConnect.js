@@ -57,24 +57,39 @@ function publish(msg,key) {
 
 
 
+var rpcQueue;
+var callbacks = {};
+function RPCInit(ready)
+{
+    "use strict";
+    channel.assertQueue('', {exclusive: true},  (err, q) => {
+        rpcQueue = q.queue;
+        channel.consume(q.queue,  (msg) => {
+            if (callbacks[msg.properties.correlationId] !== undefined) {
+                callbacks[msg.properties.correlationId](msg.content.toString());
+                callbacks[msg.properties.correlationId] = undefined;
+            }
+        }, {noAck: true});
+        ready();
+    });
+}
+function RPC(queue,service,sendMsg,cb){
+    var corr = generateUuid();
+    callbacks[corr] = cb;
+    console.log(corr);
+    if (typeof sendMsg !== 'string') {
+        sendMsg = JSON.stringify(sendMsg);
+    }
+    channel.sendToQueue("RPC."+queue,
+        new Buffer(sendMsg),
+        {correlationId: corr, replyTo: rpcQueue,type:service}
+    );
 
-function RPC(queue,service,cb,ready){
-        channel.assertQueue('', {exclusive: true},  (err, q) => {
-            channel.consume(q.queue,  (msg) => {
-                if (msg.properties.correlationId == service) {
-                    cb(msg.content.toString());
-                }
-            }, {noAck: true});
-
-            ready((sendMsg)=>{
-                if (typeof sendMsg !== 'string') {
-                    sendMsg = JSON.stringify(sendMsg);
-                }
-                channel.sendToQueue("RPC."+queue,
-                new Buffer(sendMsg),
-                {correlationId: service, replyTo: q.queue});
-            });
-        });
+}
+function generateUuid() {
+    return Math.random().toString() +
+        Math.random().toString() +
+        Math.random().toString();
 }
 
 function RPCListen(queue,services) {
@@ -84,7 +99,7 @@ function RPCListen(queue,services) {
         console.log(' [x] Awaiting RPC requests');
         channel.consume(q.queue, function reply(msg) {
             new Promise((resolve, reject) => {
-                if(services[msg.properties.correlationId] == undefined)
+                if(services[msg.properties.type] == undefined)
                 {
                     channel.sendToQueue(msg.properties.replyTo,
                         new Buffer("Unknown service"),
@@ -92,7 +107,7 @@ function RPCListen(queue,services) {
                     channel.ack(msg);
                 }
                 else {
-                    services[msg.properties.correlationId](msg.content.toString(), resolve, reject);
+                    services[msg.properties.type](msg.content.toString(), resolve, reject);
                 }
             }).then((sendMsg) => {
                 if (typeof sendMsg !== 'string') {
@@ -125,5 +140,6 @@ module.exports = {
     publish:publish,
     listen:listen,
     RPCListen:RPCListen,
-    RPC:RPC
+    RPC:RPC,
+    RPCInit:RPCInit
 };
