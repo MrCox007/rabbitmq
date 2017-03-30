@@ -54,6 +54,61 @@ function publish(msg,key) {
         }
     });
 }
+
+
+
+
+function RPC(queue,service,cb,ready){
+        channel.assertQueue('', {exclusive: true},  (err, q) => {
+            channel.consume(q.queue,  (msg) => {
+                if (msg.properties.correlationId == service) {
+                    cb(msg.content.toString());
+                }
+            }, {noAck: true});
+
+            ready((sendMsg)=>{
+                if (typeof sendMsg !== 'string') {
+                    sendMsg = JSON.stringify(sendMsg);
+                }
+                channel.sendToQueue("RPC."+queue,
+                new Buffer(sendMsg),
+                {correlationId: service, replyTo: q.queue});
+            });
+        });
+}
+
+function RPCListen(queue,services) {
+    "use strict";
+    channel.assertQueue("RPC." + queue, {durable: false}, function (err, q) {
+        channel.prefetch(1);
+        console.log(' [x] Awaiting RPC requests');
+        channel.consume(q.queue, function reply(msg) {
+            new Promise((resolve, reject) => {
+                if(services[msg.properties.correlationId] == undefined)
+                {
+                    channel.sendToQueue(msg.properties.replyTo,
+                        new Buffer("Unknown service"),
+                        {correlationId: msg.properties.correlationId});
+                    channel.ack(msg);
+                }
+                else {
+                    services[msg.properties.correlationId](msg.content.toString(), resolve, reject);
+                }
+            }).then((sendMsg) => {
+                if (typeof sendMsg !== 'string') {
+                    sendMsg = JSON.stringify(sendMsg);
+                }
+
+                channel.sendToQueue(msg.properties.replyTo,
+                    new Buffer(sendMsg),
+                    {correlationId: msg.properties.correlationId});
+                channel.ack(msg);
+            }).catch((msg) => {
+            });
+        });
+
+    });
+}
 function listen(queue,key,cb){
     channel.assertQueue(queue, {durable:true},function(err, q) {
         console.log(' [*] Waiting for logs. To exit press CTRL+C'+q.queue);
@@ -68,5 +123,7 @@ function listen(queue,key,cb){
 module.exports = {
     connect:connect,
     publish:publish,
-    listen:listen
+    listen:listen,
+    RPCListen:RPCListen,
+    RPC:RPC
 };
